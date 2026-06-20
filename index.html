@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jewelry Stock Scanner</title>
+    <!-- SheetJS for Excel Import/Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- html5-qrcode for Camera Scanning -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 15px; background: #f4f4f9; color: #333; }
+        h2 { color: #2c3e50; }
+        #reader { width: 100%; max-width: 400px; margin: 0 auto; border: 2px dashed #3498db; border-radius: 8px; }
+        .btn { padding: 12px 20px; font-size: 16px; margin: 10px 5px; border: none; border-radius: 5px; cursor: pointer; color: white; }
+        .btn-primary { background: #3498db; }
+        .btn-success { background: #2ecc71; }
+        .btn-danger { background: #e74c3c; }
+        #result-box { margin-top: 20px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); display: none; text-align: left; }
+        .found { border-left: 5px solid #2ecc71; }
+        .not-found { border-left: 5px solid #e74c3c; }
+        .stat { font-size: 18px; font-weight: bold; color: #2c3e50; margin: 10px 0; }
+        input[type="file"] { margin: 15px 0; }
+    </style>
+</head>
+<body>
+
+    <h2>📦 Jewelry Stock Checker</h2>
+    <p class="stat">Items Checked: <span id="checkedCount">0</span> / <span id="totalCount">0</span></p>
+
+    <!-- 1. Upload Excel -->
+    <input type="file" id="fileInput" accept=".xlsx, .xls" class="btn btn-primary">
+    
+    <!-- 2. Camera Scanner -->
+    <div id="reader"></div>
+    <button id="startBtn" class="btn btn-success" style="display:none;">Start Camera</button>
+    <button id="stopBtn" class="btn btn-danger" style="display:none;">Stop Camera</button>
+
+    <!-- 3. Result Display -->
+    <div id="result-box"></div>
+
+    <!-- 4. Download Updated Excel -->
+    <button id="downloadBtn" class="btn btn-success" style="display:none;">💾 Download Updated Excel</button>
+
+    <script>
+        let stockData = [];
+        let html5QrCode = null;
+        let checkedCount = 0;
+
+        // --- 1. HANDLE EXCEL UPLOAD ---
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                
+                // Convert to JSON
+                stockData = XLSX.utils.sheet_to_json(firstSheet);
+                
+                // Clean up headers (remove hidden spaces) and add 'Checked' column
+                stockData.forEach(row => {
+                    Object.keys(row).forEach(key => {
+                        let cleanKey = key.trim();
+                        if (cleanKey !== key) {
+                            row[cleanKey] = row[key];
+                            delete row[key];
+                        }
+                    });
+                    // Initialize the Checkbox column
+                    row['Checked'] = row['Checked'] || ''; 
+                });
+
+                document.getElementById('totalCount').innerText = stockData.length;
+                document.getElementById('startBtn').style.display = 'inline-block';
+                alert(`Loaded ${stockData.length} items. Ready to scan!`);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        // --- 2. CAMERA SCANNING LOGIC ---
+        document.getElementById('startBtn').addEventListener('click', () => {
+            html5QrCode = new Html5Qrcode("reader");
+            const config = { fps: 10, qrbox: { width: 250, height: 150 } };
+            
+            html5QrCode.start(
+                { facingMode: "environment" }, // Use back camera
+                config,
+                onScanSuccess,
+                onScanFailure
+            ).then(() => {
+                document.getElementById('startBtn').style.display = 'none';
+                document.getElementById('stopBtn').style.display = 'inline-block';
+            }).catch(err => {
+                alert("Camera error: " + err);
+            });
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            if (html5QrCode && html5QrCode.isScanning) {
+                html5QrCode.stop().then(() => {
+                    document.getElementById('startBtn').style.display = 'inline-block';
+                    document.getElementById('stopBtn').style.display = 'none';
+                });
+            }
+        });
+
+        function onScanSuccess(decodedText, decodedResult) {
+            // Prevent scanning the same code multiple times rapidly
+            html5QrCode.pause(); 
+            
+            // Match Item Code
+            // Note: We use .toString().trim() to ensure exact matching despite Excel formatting
+            let item = stockData.find(row => 
+                row['Item Code'] && row['Item Code'].toString().trim() === decodedText.trim()
+            );
+
+            const resultBox = document.getElementById('result-box');
+            resultBox.style.display = 'block';
+
+            if (item) {
+                // Update the "Checkbox" in memory
+                if (item['Checked'] !== '✓') {
+                    item['Checked'] = '✓';
+                    checkedCount++;
+                    document.getElementById('checkedCount').innerText = checkedCount;
+                }
+
+                resultBox.className = 'found';
+                resultBox.innerHTML = `
+                    <h3 style="color:#2ecc71; margin-top:0;">✅ MATCH FOUND</h3>
+                    <p><strong>Code:</strong> ${item['Item Code']}</p>
+                    <p><strong>Desc:</strong> ${item['Description']}</p>
+                    <p><strong>Gold:</strong> ${item['Gold Type']} | <strong>Wt:</strong> ${item['Gold Wt.']}</p>
+                    <p><strong>Labour:</strong> ${item['Labour']}</p>
+                    <p><strong>Status:</strong> <span style="color:green; font-weight:bold;">Checked ✓</span></p>
+                `;
+            } else {
+                resultBox.className = 'not-found';
+                resultBox.innerHTML = `<h3 style="color:#e74c3c; margin-top:0;">❌ NOT FOUND</h3><p>Code: <strong>${decodedText}</strong> is not in the uploaded sheet.</p>`;
+            }
+
+            // Resume scanning after 2 seconds
+            setTimeout(() => {
+                if (html5QrCode && !html5QrCode.isScanning) {
+                    html5QrCode.resume();
+                }
+            }, 2000);
+        }
+
+        function onScanFailure(error) {
+            // Ignore scan failures (happens every frame when no barcode is in view)
+        }
+
+        // --- 3. DOWNLOAD UPDATED EXCEL ---
+        document.getElementById('downloadBtn').addEventListener('click', () => {
+            if (stockData.length === 0) return;
+
+            // Convert JSON back to Sheet
+            const ws = XLSX.utils.json_to_sheet(stockData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+            
+            // Trigger Download
+            XLSX.writeFile(wb, "Stock_Updated_" + new Date().toISOString().slice(0,10) + ".xlsx");
+        });
+
+        // Show download button once data is loaded
+        document.getElementById('fileInput').addEventListener('change', () => {
+            document.getElementById('downloadBtn').style.display = 'inline-block';
+        });
+    </script>
+</body>
+</html>
